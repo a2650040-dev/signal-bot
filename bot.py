@@ -1,5 +1,4 @@
 import os
-import re
 import logging
 import httpx
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -13,7 +12,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 
 USERS = {}
 
@@ -24,42 +23,60 @@ def get_user(user_id):
     return USERS[user_id]
 
 
-# ============ GROQ COMPOUND (встроенный веб-поиск) ============
+# ============ TAVILY SEARCH ============
 
-async def get_digest_from_groq(topic: str) -> str:
+async def get_digest_from_tavily(topic: str) -> str:
     """
-    groq/compound сам ищет в интернете и возвращает дайджест.
-    Никакого RSS, никаких сторонних API — всё внутри Groq.
+    Tavily Search API — реальный веб-поиск новостей.
+    Возвращает свежие статьи с заголовком, описанием и ссылкой.
     """
-    prompt = f"5 свежих новостей по теме: {topic}. Для каждой: заголовок, 1 предложение о содержании, ссылка."
-
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
-                "https://api.groq.com/openai/v1/chat/completions",
+                "https://api.tavily.com/search",
                 headers={
-                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                    "Authorization": f"Bearer {TAVILY_API_KEY}",
                     "Content-Type": "application/json"
                 },
                 json={
-                    "model": "groq/compound",
-                    "messages": [{"role": "user", "content": prompt}],
-                    "search_settings": {
-                        "country": "russia"
-                    }
+                    "query": topic,
+                    "search_depth": "basic",
+                    "topic": "news",
+                    "days": 7,           # новости за последние 7 дней
+                    "max_results": 5,
+                    "include_answer": False,
+                    "include_raw_content": False
                 }
             )
             data = resp.json()
-            logger.info(f"Groq status: {resp.status_code}")
+            logger.info(f"Tavily status: {resp.status_code}")
 
-            if "choices" not in data:
-                logger.error(f"Groq error response: {data}")
+            if resp.status_code != 200:
+                logger.error(f"Tavily error: {data}")
                 return None
 
-            return data["choices"][0]["message"]["content"]
+            results = data.get("results", [])
+            if not results:
+                return None
+
+            lines = []
+            for i, item in enumerate(results, 1):
+                title = item.get("title", "Без заголовка")
+                snippet = item.get("content", "").strip()
+                url = item.get("url", "")
+                published = item.get("published_date", "")
+
+                # Обрезаем snippet до ~200 символов
+                if len(snippet) > 200:
+                    snippet = snippet[:200].rsplit(" ", 1)[0] + "..."
+
+                date_str = f" _{published}_" if published else ""
+                lines.append(f"*{i}. {title}*{date_str}\n{snippet}\n🔗 {url}")
+
+            return "\n\n".join(lines)
 
     except Exception as e:
-        logger.error(f"Groq compound error: {type(e).__name__}: {e}")
+        logger.error(f"Tavily error: {type(e).__name__}: {e}")
         import traceback
         logger.error(traceback.format_exc())
         return None
@@ -80,7 +97,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📡 *Signal* — AI-дайджест новостей\n\n"
         "Добавь любые темы и получай свежие новости из интернета.\n"
-        "Работает на Groq Compound с встроенным веб-поиском.",
+        "Работает на Tavily Search — реальный веб-поиск.",
         reply_markup=main_menu_keyboard(),
         parse_mode="Markdown"
     )
@@ -192,7 +209,7 @@ async def get_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
-    result = await get_digest_from_groq(topic)
+    result = await get_digest_from_tavily(topic)
 
     if not result:
         await query.edit_message_text(
@@ -269,6 +286,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     if not TELEGRAM_TOKEN:
         raise ValueError("TELEGRAM_TOKEN не задан!")
+    if not TAVILY_API_KEY:
+        raise ValueError("TAVILY_API_KEY не задан!")
 
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
