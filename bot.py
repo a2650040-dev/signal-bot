@@ -98,7 +98,6 @@ def mark_sent(user_id: int, topic_id: int, urls: list):
 # ============ ИСТОЧНИКИ ============
 
 async def fetch_tavily(topic: str, lang: str) -> list:
-    country = "russia" if lang == "ru" else "united states"
     try:
         async with httpx.AsyncClient(timeout=20) as client:
             resp = await client.post(
@@ -110,7 +109,6 @@ async def fetch_tavily(topic: str, lang: str) -> list:
                     "topic": "general",
                     "time_range": "week",
                     "max_results": 10,
-                    "country": country,
                     "include_answer": False,
                     "include_raw_content": False
                 }
@@ -181,6 +179,9 @@ RSS_FEEDS = {
         "https://vc.ru/rss",
         "https://habr.com/ru/rss/articles/",
         "https://pikabu.ru/rss.php",
+        "https://smart-lab.ru/rss.xml",
+        "https://www.it-world.ru/rss/",
+        "https://4cio.ru/rss/",
     ],
     "en": [
         "https://feeds.arstechnica.com/arstechnica/index",
@@ -189,23 +190,33 @@ RSS_FEEDS = {
     ]
 }
 
+RSS_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "application/rss+xml, application/xml, text/xml, */*",
+}
+
 
 async def fetch_rss(lang: str) -> list:
     import feedparser
     articles = []
     feeds = RSS_FEEDS.get(lang, RSS_FEEDS["en"])
-    for feed_url in feeds:
-        try:
-            feed = feedparser.parse(feed_url)
-            for entry in feed.entries[:8]:
-                articles.append({
-                    "title": entry.get("title", ""),
-                    "url": entry.get("link", ""),
-                    "summary": entry.get("summary", "")[:300],
-                    "source": feed.feed.get("title", "RSS")
-                })
-        except Exception as ex:
-            logger.error(f"RSS error {feed_url}: {ex}")
+    async with httpx.AsyncClient(timeout=15, follow_redirects=True, headers=RSS_HEADERS) as client:
+        for feed_url in feeds:
+            try:
+                resp = await client.get(feed_url)
+                if resp.status_code != 200:
+                    logger.warning(f"RSS {feed_url} вернул {resp.status_code}")
+                    continue
+                feed = feedparser.parse(resp.text)
+                for entry in feed.entries[:8]:
+                    articles.append({
+                        "title": entry.get("title", ""),
+                        "url": entry.get("link", ""),
+                        "summary": entry.get("summary", "")[:300],
+                        "source": feed.feed.get("title", "RSS")
+                    })
+            except Exception as ex:
+                logger.error(f"RSS error {feed_url}: {ex}")
     return articles
 
 
