@@ -17,6 +17,12 @@ TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 
 USERS = {}
 
+# Tavily: country доступен только для topic=general (строчные, полное название)
+COUNTRY_MAP = {
+    "cyrillic": "russia",
+    "latin": "united states",
+}
+
 
 def get_user(user_id):
     if user_id not in USERS:
@@ -25,23 +31,19 @@ def get_user(user_id):
 
 
 def detect_country(text: str) -> str:
-    """Определяет страну по языку запроса для Tavily."""
     cyrillic = sum(1 for c in text if '\u0400' <= c <= '\u04FF')
     latin = sum(1 for c in text if c.isalpha() and c.isascii())
-    if cyrillic > latin:
-        return "RU"
-    # можно расширить: китайский, арабский и т.д.
-    return "US"
+    return "russia" if cyrillic > latin else "united states"
 
 
 def e(text: str) -> str:
-    """Экранирует HTML-спецсимволы для безопасной отправки в Telegram."""
     return html.escape(str(text))
 
 
 # ============ TAVILY SEARCH ============
 
 async def get_digest_from_tavily(topic: str) -> str:
+    country = detect_country(topic)
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
@@ -53,16 +55,16 @@ async def get_digest_from_tavily(topic: str) -> str:
                 json={
                     "query": topic,
                     "search_depth": "basic",
-                    "topic": "news",
-                    "days": 7,
+                    "topic": "general",       # country работает только с general
+                    "time_range": "week",      # вместо days=7
                     "max_results": 5,
-                    "country": detect_country(topic),
+                    "country": country,
                     "include_answer": False,
                     "include_raw_content": False
                 }
             )
             data = resp.json()
-            logger.info(f"Tavily status: {resp.status_code}")
+            logger.info(f"Tavily status: {resp.status_code}, country: {country}")
 
             if resp.status_code != 200:
                 logger.error(f"Tavily error: {data}")
@@ -234,7 +236,6 @@ async def get_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     header = f"📰 <b>Дайджест: {e(topic)}</b>\n\n"
-    # Telegram: лимит 4096 символов
     max_len = 4096 - len(header) - 100
     if len(result) > max_len:
         result = result[:max_len].rsplit("\n", 1)[0] + "\n\n<i>[текст обрезан]</i>"
@@ -243,7 +244,7 @@ async def get_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
         header + result,
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("🔄 Обновить", callback_data=f"digest_{idx}")],
-            [InlineKeyboardButton("🔍 Другая тема", callback_data="choose_topic")],
+            [InlineKeyboardButton("🔍 Другая тему", callback_data="choose_topic")],
             [InlineKeyboardButton("🏠 Меню", callback_data="menu")]
         ]),
         parse_mode="HTML",
