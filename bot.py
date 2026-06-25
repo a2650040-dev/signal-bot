@@ -250,7 +250,9 @@ async def filter_and_summarize(articles: list, topic: str) -> list:
                 }
             )
             import json, re
-            content = resp.json()["choices"][0]["message"]["content"]
+            groq_data = resp.json()
+            logger.info(f"Groq raw response: {groq_data}")
+            content = groq_data["choices"][0]["message"]["content"]
             match = re.search(r'\[.*\]', content, re.DOTALL)
             if not match:
                 return articles[:5]
