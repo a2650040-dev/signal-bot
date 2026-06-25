@@ -66,7 +66,9 @@ async def get_digest_from_groq(topic: str) -> str:
             return data["choices"][0]["message"]["content"]
 
     except Exception as e:
-        logger.error(f"Groq compound error: {e}")
+        logger.error(f"Groq compound error: {type(e).__name__}: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return None
 
 
