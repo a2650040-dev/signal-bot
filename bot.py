@@ -1,5 +1,6 @@
 import os
 import logging
+import html
 import httpx
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -23,13 +24,14 @@ def get_user(user_id):
     return USERS[user_id]
 
 
+def e(text: str) -> str:
+    """Экранирует HTML-спецсимволы для безопасной отправки в Telegram."""
+    return html.escape(str(text))
+
+
 # ============ TAVILY SEARCH ============
 
 async def get_digest_from_tavily(topic: str) -> str:
-    """
-    Tavily Search API — реальный веб-поиск новостей.
-    Возвращает свежие статьи с заголовком, описанием и ссылкой.
-    """
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
@@ -42,7 +44,7 @@ async def get_digest_from_tavily(topic: str) -> str:
                     "query": topic,
                     "search_depth": "basic",
                     "topic": "news",
-                    "days": 7,           # новости за последние 7 дней
+                    "days": 7,
                     "max_results": 5,
                     "include_answer": False,
                     "include_raw_content": False
@@ -61,22 +63,21 @@ async def get_digest_from_tavily(topic: str) -> str:
 
             lines = []
             for i, item in enumerate(results, 1):
-                title = item.get("title", "Без заголовка")
+                title = e(item.get("title", "Без заголовка"))
                 snippet = item.get("content", "").strip()
-                url = item.get("url", "")
-                published = item.get("published_date", "")
-
-                # Обрезаем snippet до ~200 символов
                 if len(snippet) > 200:
                     snippet = snippet[:200].rsplit(" ", 1)[0] + "..."
+                snippet = e(snippet)
+                url = e(item.get("url", ""))
+                published = e(item.get("published_date", ""))
 
-                date_str = f" _{published}_" if published else ""
-                lines.append(f"*{i}. {title}*{date_str}\n{snippet}\n🔗 {url}")
+                date_str = f" <i>{published}</i>" if published else ""
+                lines.append(f"<b>{i}. {title}</b>{date_str}\n{snippet}\n🔗 {url}")
 
             return "\n\n".join(lines)
 
-    except Exception as e:
-        logger.error(f"Tavily error: {type(e).__name__}: {e}")
+    except Exception as ex:
+        logger.error(f"Tavily error: {type(ex).__name__}: {ex}")
         import traceback
         logger.error(traceback.format_exc())
         return None
@@ -95,11 +96,11 @@ def main_menu_keyboard():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     get_user(update.effective_user.id)["state"] = None
     await update.message.reply_text(
-        "📡 *Signal* — AI-дайджест новостей\n\n"
+        "📡 <b>Signal</b> — AI-дайджест новостей\n\n"
         "Добавь любые темы и получай свежие новости из интернета.\n"
         "Работает на Tavily Search — реальный веб-поиск.",
         reply_markup=main_menu_keyboard(),
-        parse_mode="Markdown"
+        parse_mode="HTML"
     )
 
 
@@ -109,8 +110,8 @@ async def add_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
     get_user(query.from_user.id)["state"] = "waiting_topic"
     await query.edit_message_text(
         "✏️ Напиши тему которая тебя интересует:\n\n"
-        "_Например: исторические личности, крипта, футбол, AI-инструменты_",
-        parse_mode="Markdown"
+        "<i>Например: исторические личности, крипта, футбол, AI-инструменты</i>",
+        parse_mode="HTML"
     )
 
 
@@ -134,9 +135,9 @@ async def list_topics(update: Update, context: ContextTypes.DEFAULT_TYPE):
     buttons.append([InlineKeyboardButton("🏠 Меню", callback_data="menu")])
 
     await query.edit_message_text(
-        "📋 *Твои темы* (нажми чтобы удалить):",
+        "📋 <b>Твои темы</b> (нажми чтобы удалить):",
         reply_markup=InlineKeyboardMarkup(buttons),
-        parse_mode="Markdown"
+        parse_mode="HTML"
     )
 
 
@@ -163,9 +164,9 @@ async def delete_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
     buttons = [[InlineKeyboardButton(f"❌ {t}", callback_data=f"del_{i}")] for i, t in enumerate(topics)]
     buttons.append([InlineKeyboardButton("🏠 Меню", callback_data="menu")])
     await query.edit_message_text(
-        "📋 *Твои темы*:",
+        "📋 <b>Твои темы</b>:",
         reply_markup=InlineKeyboardMarkup(buttons),
-        parse_mode="Markdown"
+        parse_mode="HTML"
     )
 
 
@@ -205,8 +206,8 @@ async def get_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     topic = user["topics"][idx]
     await query.edit_message_text(
-        f"⏳ Ищу свежие новости по теме *{topic}*...",
-        parse_mode="Markdown"
+        f"⏳ Ищу свежие новости по теме <b>{e(topic)}</b>...",
+        parse_mode="HTML"
     )
 
     result = await get_digest_from_tavily(topic)
@@ -221,18 +222,20 @@ async def get_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Telegram ограничивает сообщение 4096 символами
-    if len(result) > 3800:
-        result = result[:3800] + "...\n\n_[текст обрезан]_"
+    header = f"📰 <b>Дайджест: {e(topic)}</b>\n\n"
+    # Telegram: лимит 4096 символов
+    max_len = 4096 - len(header) - 100
+    if len(result) > max_len:
+        result = result[:max_len].rsplit("\n", 1)[0] + "\n\n<i>[текст обрезан]</i>"
 
     await query.edit_message_text(
-        f"📰 *Дайджест: {topic}*\n\n{result}",
+        header + result,
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("🔄 Обновить", callback_data=f"digest_{idx}")],
             [InlineKeyboardButton("🔍 Другая тема", callback_data="choose_topic")],
             [InlineKeyboardButton("🏠 Меню", callback_data="menu")]
         ]),
-        parse_mode="Markdown",
+        parse_mode="HTML",
         disable_web_page_preview=True
     )
 
@@ -242,9 +245,9 @@ async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     get_user(query.from_user.id)["state"] = None
     await query.edit_message_text(
-        "📡 *Signal* — главное меню",
+        "📡 <b>Signal</b> — главное меню",
         reply_markup=main_menu_keyboard(),
-        parse_mode="Markdown"
+        parse_mode="HTML"
     )
 
 
@@ -256,8 +259,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if topic in user["topics"]:
             await update.message.reply_text(
-                f"⚠️ Тема *{topic}* уже есть.",
-                parse_mode="Markdown",
+                f"⚠️ Тема <b>{e(topic)}</b> уже есть.",
+                parse_mode="HTML",
                 reply_markup=main_menu_keyboard()
             )
             return
@@ -270,8 +273,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user["state"] = None
 
         await update.message.reply_text(
-            f"✅ Тема *{topic}* добавлена! Всего тем: {len(user['topics'])}",
-            parse_mode="Markdown",
+            f"✅ Тема <b>{e(topic)}</b> добавлена! Всего тем: {len(user['topics'])}",
+            parse_mode="HTML",
             reply_markup=main_menu_keyboard()
         )
     else:
