@@ -36,9 +36,8 @@ def e(text: str) -> str:
 
 
 def detect_lang(text: str) -> str:
-    cyrillic = sum(1 for c in text if "\u0400" <= c <= "\u04FF")
-    latin = sum(1 for c in text if c.isalpha() and c.isascii())
-    return "ru" if cyrillic > latin else "en"
+    cyrillic = any(c for c in text if "\u0400" <= c <= "\u04FF")
+    return "ru" if cyrillic else "en"
 
 
 # ============ SUPABASE ============
