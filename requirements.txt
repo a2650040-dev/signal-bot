@@ -1,4 +1,5 @@
-python-telegram-bot==21.0.1
-httpx==0.25.0
+python-telegram-bot==22.8
+httpx==0.28.1
 feedparser==6.0.10
 python-dotenv==1.0.0
+requests
