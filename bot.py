@@ -24,6 +24,16 @@ def get_user(user_id):
     return USERS[user_id]
 
 
+def detect_country(text: str) -> str:
+    """Определяет страну по языку запроса для Tavily."""
+    cyrillic = sum(1 for c in text if '\u0400' <= c <= '\u04FF')
+    latin = sum(1 for c in text if c.isalpha() and c.isascii())
+    if cyrillic > latin:
+        return "RU"
+    # можно расширить: китайский, арабский и т.д.
+    return "US"
+
+
 def e(text: str) -> str:
     """Экранирует HTML-спецсимволы для безопасной отправки в Telegram."""
     return html.escape(str(text))
@@ -46,6 +56,7 @@ async def get_digest_from_tavily(topic: str) -> str:
                     "topic": "news",
                     "days": 7,
                     "max_results": 5,
+                    "country": detect_country(topic),
                     "include_answer": False,
                     "include_raw_content": False
                 }
