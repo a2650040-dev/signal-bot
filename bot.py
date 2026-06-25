@@ -1,9 +1,7 @@
 import os
-import json
 import re
 import logging
 import httpx
-from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
@@ -17,170 +15,59 @@ logger = logging.getLogger(__name__)
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# Хранилище: { user_id: { "topics": [...], "state": "" } }
 USERS = {}
 
 
 def get_user(user_id):
     if user_id not in USERS:
-        USERS[user_id] = {"topics": [], "state": None, "pending": None}
+        USERS[user_id] = {"topics": [], "state": None}
     return USERS[user_id]
 
 
-# ============ ИСТОЧНИКИ ============
+# ============ GROQ COMPOUND (встроенный веб-поиск) ============
 
-async def fetch_google_news(topic: str) -> list:
-    """Google News RSS по любой теме"""
-    try:
-        import feedparser
-        url = f"https://news.google.com/rss/search?q={topic}&hl=ru&gl=RU&ceid=RU:ru"
-        feed = feedparser.parse(url)
-        articles = []
-        for entry in feed.entries[:15]:
-            articles.append({
-                "title": entry.get("title", ""),
-                "url": entry.get("link", ""),
-                "summary": entry.get("summary", "")[:200],
-                "source": "Google News"
-            })
-        return articles
-    except Exception as e:
-        logger.error(f"Google News error: {e}")
-        return []
+async def get_digest_from_groq(topic: str) -> str:
+    """
+    groq/compound сам ищет в интернете и возвращает дайджест.
+    Никакого RSS, никаких сторонних API — всё внутри Groq.
+    """
+    prompt = f"""Найди 5 самых свежих и интересных новостей по теме: "{topic}".
 
+Для каждой новости дай:
+- Заголовок
+- 1-2 предложения о чём это
+- Ссылку на источник
 
-async def fetch_hacker_news() -> list:
-    try:
-        async with httpx.AsyncClient(timeout=8) as client:
-            ids = (await client.get(
-                "https://hacker-news.firebaseio.com/v0/topstories.json"
-            )).json()[:15]
-            articles = []
-            for post_id in ids:
-                post = (await client.get(
-                    f"https://hacker-news.firebaseio.com/v0/item/{post_id}.json"
-                )).json()
-                articles.append({
-                    "title": post.get("title", ""),
-                    "url": post.get("url", f"https://news.ycombinator.com/item?id={post_id}"),
-                    "summary": f"{post.get('score', 0)} points",
-                    "source": "Hacker News"
-                })
-            return articles
-    except Exception as e:
-        logger.error(f"HN error: {e}")
-        return []
-
-
-async def fetch_rss(feeds: list, source_name: str) -> list:
-    try:
-        import feedparser
-        articles = []
-        for url in feeds:
-            try:
-                feed = feedparser.parse(url)
-                for entry in feed.entries[:5]:
-                    articles.append({
-                        "title": entry.get("title", ""),
-                        "url": entry.get("link", ""),
-                        "summary": entry.get("summary", "")[:200],
-                        "source": source_name
-                    })
-            except:
-                pass
-        return articles
-    except:
-        return []
-
-
-async def fetch_reddit(topic: str) -> list:
-    try:
-        async with httpx.AsyncClient(
-            timeout=8,
-            headers={"User-Agent": "SignalBot/1.0"}
-        ) as client:
-            url = f"https://www.reddit.com/search.json?q={topic}&sort=hot&limit=10&t=day"
-            resp = await client.get(url)
-            posts = resp.json()["data"]["children"]
-            articles = []
-            for post in posts:
-                d = post["data"]
-                articles.append({
-                    "title": d.get("title", ""),
-                    "url": f"https://reddit.com{d.get('permalink', '')}",
-                    "summary": d.get("selftext", "")[:200] or d.get("title", ""),
-                    "source": f"Reddit r/{d.get('subreddit', '')}"
-                })
-            return articles
-    except Exception as e:
-        logger.error(f"Reddit error: {e}")
-        return []
-
-
-async def fetch_all(topic: str) -> list:
-    """Собирает статьи из всех источников"""
-    import asyncio
-
-    google_task = fetch_google_news(topic)
-    hn_task = fetch_hacker_news()
-    reddit_task = fetch_reddit(topic)
-    rss_task = fetch_rss([
-        "https://feeds.arstechnica.com/arstechnica/index",
-        "https://www.theverge.com/rss/index.xml",
-        "https://feeds.techcrunch.com/techcrunch/",
-        "https://habr.com/ru/rss/hubs/all/",
-        "https://pikabu.ru/rss.php",
-    ], "RSS")
-
-    results = await asyncio.gather(google_task, hn_task, reddit_task, rss_task)
-    all_articles = []
-    for r in results:
-        all_articles.extend(r)
-
-    return all_articles
-
-
-# ============ GROQ ФИЛЬТРАЦИЯ ============
-
-async def filter_by_topic(articles: list, topic: str) -> list:
-    if not articles or not GROQ_API_KEY:
-        return articles[:5]
-
-    articles_text = "\n".join([
-        f"{i}. [{a['source']}] {a['title']}"
-        for i, a in enumerate(articles[:30])
-    ])
-
-    prompt = f"""Пользователь интересуется темой: "{topic}"
-
-Статьи (индекс. [источник] заголовок):
-{articles_text}
-
-Выбери ТОП-5 статей МАКСИМАЛЬНО релевантных теме "{topic}".
-Если релевантных нет — выбери наиболее близкие.
-Ответь ТОЛЬКО JSON-массивом индексов без пояснений, например: [0, 3, 7, 12, 18]"""
+Формат ответа — простой текст, без лишних вступлений."""
 
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
                 "https://api.groq.com/openai/v1/chat/completions",
-                headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+                headers={
+                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                    "Content-Type": "application/json"
+                },
                 json={
-                    "model": "llama3-8b-8192",
+                    "model": "groq/compound",
                     "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.1,
-                    "max_tokens": 50
+                    "search_settings": {
+                        "country": "russia"
+                    }
                 }
             )
-            content = resp.json()["choices"][0]["message"]["content"]
-            match = re.search(r'\[[\d,\s]+\]', content)
-            if not match:
-                return articles[:5]
-            indices = json.loads(match.group())
-            return [articles[i] for i in indices if i < len(articles)]
+            data = resp.json()
+            logger.info(f"Groq status: {resp.status_code}")
+
+            if "choices" not in data:
+                logger.error(f"Groq error response: {data}")
+                return None
+
+            return data["choices"][0]["message"]["content"]
+
     except Exception as e:
-        logger.error(f"Groq error: {e}")
-        return articles[:5]
+        logger.error(f"Groq compound error: {e}")
+        return None
 
 
 # ============ МЕНЮ ============
@@ -194,11 +81,11 @@ def main_menu_keyboard():
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = get_user(update.effective_user.id)
-    user["state"] = None
+    get_user(update.effective_user.id)["state"] = None
     await update.message.reply_text(
         "📡 *Signal* — AI-дайджест новостей\n\n"
-        "Добавь темы и получай релевантные новости из Google News, Reddit, Хабра, HN и других источников.",
+        "Добавь любые темы и получай свежие новости из интернета.\n"
+        "Работает на Groq Compound с встроенным веб-поиском.",
         reply_markup=main_menu_keyboard(),
         parse_mode="Markdown"
     )
@@ -207,11 +94,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def add_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    user = get_user(query.from_user.id)
-    user["state"] = "waiting_topic"
+    get_user(query.from_user.id)["state"] = "waiting_topic"
     await query.edit_message_text(
         "✏️ Напиши тему которая тебя интересует:\n\n"
-        "_Например: исторические личности, крипта, AI-инструменты, футбол_",
+        "_Например: исторические личности, крипта, футбол, AI-инструменты_",
         parse_mode="Markdown"
     )
 
@@ -232,11 +118,7 @@ async def list_topics(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    buttons = []
-    for i, t in enumerate(topics):
-        buttons.append([
-            InlineKeyboardButton(f"❌ {t}", callback_data=f"del_{i}")
-        ])
+    buttons = [[InlineKeyboardButton(f"❌ {t}", callback_data=f"del_{i}")] for i, t in enumerate(topics)]
     buttons.append([InlineKeyboardButton("🏠 Меню", callback_data="menu")])
 
     await query.edit_message_text(
@@ -253,10 +135,8 @@ async def delete_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
     idx = int(query.data.split("_")[1])
 
     if idx < len(user["topics"]):
-        removed = user["topics"].pop(idx)
-        await query.answer(f"Удалено: {removed}", show_alert=False)
+        user["topics"].pop(idx)
 
-    # Обновляем список
     topics = user["topics"]
     if not topics:
         await query.edit_message_text(
@@ -268,20 +148,16 @@ async def delete_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    buttons = []
-    for i, t in enumerate(topics):
-        buttons.append([InlineKeyboardButton(f"❌ {t}", callback_data=f"del_{i}")])
+    buttons = [[InlineKeyboardButton(f"❌ {t}", callback_data=f"del_{i}")] for i, t in enumerate(topics)]
     buttons.append([InlineKeyboardButton("🏠 Меню", callback_data="menu")])
-
     await query.edit_message_text(
-        "📋 *Твои темы* (нажми чтобы удалить):",
+        "📋 *Твои темы*:",
         reply_markup=InlineKeyboardMarkup(buttons),
         parse_mode="Markdown"
     )
 
 
 async def choose_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Выбор темы перед дайджестом"""
     query = update.callback_query
     await query.answer()
     user = get_user(query.from_user.id)
@@ -296,9 +172,7 @@ async def choose_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    buttons = []
-    for i, t in enumerate(topics):
-        buttons.append([InlineKeyboardButton(f"🔍 {t}", callback_data=f"digest_{i}")])
+    buttons = [[InlineKeyboardButton(f"🔍 {t}", callback_data=f"digest_{i}")] for i, t in enumerate(topics)]
     buttons.append([InlineKeyboardButton("🏠 Меню", callback_data="menu")])
 
     await query.edit_message_text(
@@ -308,7 +182,6 @@ async def choose_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def get_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получить дайджест по выбранной теме"""
     query = update.callback_query
     await query.answer()
     user = get_user(query.from_user.id)
@@ -319,27 +192,31 @@ async def get_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     topic = user["topics"][idx]
-    await query.edit_message_text(f"⏳ Собираю новости по теме *{topic}*...", parse_mode="Markdown")
+    await query.edit_message_text(
+        f"⏳ Ищу свежие новости по теме *{topic}*...",
+        parse_mode="Markdown"
+    )
 
-    articles = await fetch_all(topic)
+    result = await get_digest_from_groq(topic)
 
-    if not articles:
+    if not result:
         await query.edit_message_text(
             "❌ Не удалось получить новости. Попробуй позже.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Меню", callback_data="menu")]])
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Попробовать снова", callback_data=f"digest_{idx}")],
+                [InlineKeyboardButton("🏠 Меню", callback_data="menu")]
+            ])
         )
         return
 
-    filtered = await filter_by_topic(articles, topic)
-
-    text = f"📰 *Дайджест: {topic}*\n\n"
-    for a in filtered:
-        text += f"• [{a['title']}]({a['url']})\n"
-        text += f"  _{a['source']}_\n\n"
+    # Telegram ограничивает сообщение 4096 символами
+    if len(result) > 3800:
+        result = result[:3800] + "...\n\n_[текст обрезан]_"
 
     await query.edit_message_text(
-        text,
+        f"📰 *Дайджест: {topic}*\n\n{result}",
         reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 Обновить", callback_data=f"digest_{idx}")],
             [InlineKeyboardButton("🔍 Другая тема", callback_data="choose_topic")],
             [InlineKeyboardButton("🏠 Меню", callback_data="menu")]
         ]),
@@ -351,8 +228,7 @@ async def get_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    user = get_user(query.from_user.id)
-    user["state"] = None
+    get_user(query.from_user.id)["state"] = None
     await query.edit_message_text(
         "📡 *Signal* — главное меню",
         reply_markup=main_menu_keyboard(),
@@ -368,7 +244,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if topic in user["topics"]:
             await update.message.reply_text(
-                f"⚠️ Тема *{topic}* уже добавлена.",
+                f"⚠️ Тема *{topic}* уже есть.",
                 parse_mode="Markdown",
                 reply_markup=main_menu_keyboard()
             )
@@ -382,7 +258,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user["state"] = None
 
         await update.message.reply_text(
-            f"✅ Тема *{topic}* добавлена!\n\nВсего тем: {len(user['topics'])}",
+            f"✅ Тема *{topic}* добавлена! Всего тем: {len(user['topics'])}",
             parse_mode="Markdown",
             reply_markup=main_menu_keyboard()
         )
