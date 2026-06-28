@@ -102,11 +102,9 @@ def update_last_sent(topic_id: int):
     }).eq("id", topic_id).execute()
 
 
-
 # ============ ИСТОЧНИКИ ============
 
 async def fetch_tavily(topic: str, lang: str) -> list:
-    country = "russia" if lang == "ru" else "united states"
     try:
         async with httpx.AsyncClient(timeout=20) as client:
             resp = await client.post(
@@ -118,7 +116,6 @@ async def fetch_tavily(topic: str, lang: str) -> list:
                     "topic": "general",
                     "time_range": "week",
                     "max_results": 10,
-                    "country": country,
                     "include_answer": False,
                     "include_raw_content": False
                 }
@@ -189,6 +186,9 @@ RSS_FEEDS = {
         "https://vc.ru/rss",
         "https://habr.com/ru/rss/articles/",
         "https://pikabu.ru/rss.php",
+        "https://smart-lab.ru/rss.xml",
+        "https://www.it-world.ru/rss/",
+        "https://4cio.ru/rss/",
     ],
     "en": [
         "https://feeds.arstechnica.com/arstechnica/index",
@@ -197,23 +197,33 @@ RSS_FEEDS = {
     ]
 }
 
+RSS_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "application/rss+xml, application/xml, text/xml, */*",
+}
+
 
 async def fetch_rss(lang: str) -> list:
     import feedparser
     articles = []
     feeds = RSS_FEEDS.get(lang, RSS_FEEDS["en"])
-    for feed_url in feeds:
-        try:
-            feed = feedparser.parse(feed_url)
-            for entry in feed.entries[:8]:
-                articles.append({
-                    "title": entry.get("title", ""),
-                    "url": entry.get("link", ""),
-                    "summary": entry.get("summary", "")[:300],
-                    "source": feed.feed.get("title", "RSS")
-                })
-        except Exception as ex:
-            logger.error(f"RSS error {feed_url}: {ex}")
+    async with httpx.AsyncClient(timeout=15, follow_redirects=True, headers=RSS_HEADERS) as client:
+        for feed_url in feeds:
+            try:
+                resp = await client.get(feed_url)
+                if resp.status_code != 200:
+                    logger.warning(f"RSS {feed_url} вернул {resp.status_code}")
+                    continue
+                feed = feedparser.parse(resp.text)
+                for entry in feed.entries[:8]:
+                    articles.append({
+                        "title": entry.get("title", ""),
+                        "url": entry.get("link", ""),
+                        "summary": entry.get("summary", "")[:300],
+                        "source": feed.feed.get("title", "RSS")
+                    })
+            except Exception as ex:
+                logger.error(f"RSS error {feed_url}: {ex}")
     return articles
 
 
@@ -251,7 +261,7 @@ async def filter_and_summarize(articles: list, topic: str) -> list:
                 "https://api.groq.com/openai/v1/chat/completions",
                 headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
                 json={
-                    "model": "llama3-8b-8192",
+                    "model": "llama-3.3-70b-versatile",
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.2,
                     "max_tokens": 500
@@ -509,7 +519,6 @@ async def cb_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     topic = result.data[0]
 
     # Определяем первый ли это запрос или обновление
-    # Если в сообщении уже есть текст дайджеста — это обновление, не показываем "⏳"
     current_text = query.message.text or ""
     is_refresh = current_text.startswith("📰")
 
@@ -543,13 +552,13 @@ async def cb_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(digest) > 4000:
         digest = digest[:4000] + "\n\n<i>[обрезано]</i>"
 
-    # Удаляем промежуточное сообщение ("⏳ Собираю..." или старый дайджест)
+    # Удаляем промежуточное сообщение
     try:
         await query.message.delete()
     except Exception:
         pass
 
-    # Всегда отправляем дайджест новым сообщением
+    # Отправляем дайджест новым сообщением
     await query.message.reply_text(
         digest,
         reply_markup=InlineKeyboardMarkup([
@@ -565,7 +574,6 @@ async def cb_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     context.user_data["state"] = None
-
     # Если это дайджест — только убираем кнопки, если нет — удаляем сообщение
     current_text = query.message.text or ""
     if current_text.startswith("📰"):
