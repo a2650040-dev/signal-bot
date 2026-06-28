@@ -543,19 +543,11 @@ async def cb_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(digest) > 4000:
         digest = digest[:4000] + "\n\n<i>[обрезано]</i>"
 
-    if not is_refresh:
-        # Первый запрос — убираем кнопки у "⏳" и отправляем новым сообщением
-        try:
-            await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup([]))
-        except Exception:
-            pass
-
-    # Убираем кнопки у старого дайджеста при обновлении
-    if is_refresh:
-        try:
-            await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup([]))
-        except Exception:
-            pass
+    # Удаляем промежуточное сообщение ("⏳ Собираю..." или старый дайджест)
+    try:
+        await query.message.delete()
+    except Exception:
+        pass
 
     # Всегда отправляем дайджест новым сообщением
     await query.message.reply_text(
