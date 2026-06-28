@@ -508,33 +508,56 @@ async def cb_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     topic = result.data[0]
 
-    await query.edit_message_text(
-        f"⏳ Собираю дайджест по теме <b>{e(topic['name'])}</b>...",
-        parse_mode="HTML"
-    )
+    # Определяем первый ли это запрос или обновление
+    # Если в сообщении уже есть текст дайджеста — это обновление, не показываем "⏳"
+    current_text = query.message.text or ""
+    is_refresh = current_text.startswith("📰")
+
+    if not is_refresh:
+        await query.edit_message_text(
+            f"⏳ Собираю дайджест по теме <b>{e(topic['name'])}</b>...",
+            parse_mode="HTML"
+        )
 
     digest = await build_digest(user_id, topic)
 
     if not digest:
-        await query.edit_message_text(
-            "📭 Новых статей по этой теме пока нет. Попробуй позже.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔄 Попробовать снова", callback_data=f"digest_{topic_id}")],
-                [InlineKeyboardButton("🏠 Меню", callback_data="menu")]
-            ])
-        )
+        if is_refresh:
+            await query.message.reply_text(
+                "📭 Новых статей по этой теме пока нет.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Попробовать снова", callback_data=f"digest_{topic_id}")],
+                    [InlineKeyboardButton("🏠 Меню", callback_data="menu")]
+                ])
+            )
+        else:
+            await query.edit_message_text(
+                "📭 Новых статей по этой теме пока нет. Попробуй позже.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Попробовать снова", callback_data=f"digest_{topic_id}")],
+                    [InlineKeyboardButton("🏠 Меню", callback_data="menu")]
+                ])
+            )
         return
 
     if len(digest) > 4000:
         digest = digest[:4000] + "\n\n<i>[обрезано]</i>"
 
-    # Убираем кнопки у сообщения "⏳ Собираю..." (если есть)
-    try:
-        await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup([]))
-    except Exception:
-        pass
+    if not is_refresh:
+        # Первый запрос — убираем кнопки у "⏳" и отправляем новым сообщением
+        try:
+            await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup([]))
+        except Exception:
+            pass
 
-    # Отправляем дайджест новым сообщением
+    # Убираем кнопки у старого дайджеста при обновлении
+    if is_refresh:
+        try:
+            await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup([]))
+        except Exception:
+            pass
+
+    # Всегда отправляем дайджест новым сообщением
     await query.message.reply_text(
         digest,
         reply_markup=InlineKeyboardMarkup([
