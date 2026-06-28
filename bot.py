@@ -154,9 +154,13 @@ async def fetch_hackernews() -> list:
         return []
 
 
+REDDIT_EN = ["technology", "startups", "artificial", "programming"]
+REDDIT_RU = ["russia", "russian", "newsru", "investing_ru", "financeru",
+             "devops_ru", "artificial", "startups", "technology", "programming"]
+
 async def fetch_reddit(subreddits: list = None) -> list:
     if subreddits is None:
-        subreddits = ["technology", "startups", "artificial"]
+        subreddits = REDDIT_EN
     articles = []
     try:
         async with httpx.AsyncClient(timeout=15, headers={"User-Agent": "SignalBot/1.0"}) as client:
@@ -186,9 +190,11 @@ RSS_FEEDS = {
         "https://vc.ru/rss",
         "https://habr.com/ru/rss/articles/",
         "https://pikabu.ru/rss.php",
-        "https://smart-lab.ru/allnews/rss/",
-        "https://www.it-world.ru/rss/",
         "https://www.kommersant.ru/RSS/main.xml",
+        "https://meduza.io/rss/all",
+        "https://tass.ru/rss/v2.xml",
+        "https://iz.ru/xml/rss/all.xml",
+        "https://www.it-world.ru/rss/",
     ],
     "en": [
         "https://feeds.arstechnica.com/arstechnica/index",
@@ -305,7 +311,10 @@ async def build_digest(user_id: int, topic: dict) -> str | None:
     if lang == "en":
         hn = await fetch_hackernews()
         all_articles.extend(hn)
-        reddit = await fetch_reddit()
+        reddit = await fetch_reddit(REDDIT_EN)
+        all_articles.extend(reddit)
+    else:
+        reddit = await fetch_reddit(REDDIT_RU)
         all_articles.extend(reddit)
 
     rss = await fetch_rss(lang)
