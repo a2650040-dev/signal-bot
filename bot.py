@@ -528,8 +528,11 @@ async def cb_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(digest) > 4000:
         digest = digest[:4000] + "\n\n<i>[обрезано]</i>"
 
-    # Убираем кнопки у сообщения "⏳ Собираю..."
-    await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup([]))
+    # Убираем кнопки у сообщения "⏳ Собираю..." (если есть)
+    try:
+        await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup([]))
+    except Exception:
+        pass
 
     # Отправляем дайджест новым сообщением
     await query.message.reply_text(
@@ -549,7 +552,10 @@ async def cb_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["state"] = None
 
     # Убираем кнопки у предыдущего сообщения
-    await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup([]))
+    try:
+        await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup([]))
+    except Exception:
+        pass
 
     # Отправляем новое сообщение с меню
     await query.message.reply_text(
