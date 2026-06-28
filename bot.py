@@ -181,14 +181,14 @@ async def fetch_reddit(subreddits: list = None) -> list:
 # RSS источники — добавить новый: просто дописать строку в список
 RSS_FEEDS = {
     "ru": [
-        "https://rbc.ru/rss/news",
+        "https://rssexport.rbc.ru/rbcnews/news/30/full.rss",
         "https://lenta.ru/rss/news",
         "https://vc.ru/rss",
         "https://habr.com/ru/rss/articles/",
         "https://pikabu.ru/rss.php",
-        "https://smart-lab.ru/rss.xml",
+        "https://smart-lab.ru/allnews/rss/",
         "https://www.it-world.ru/rss/",
-        "https://4cio.ru/rss/",
+        "https://www.kommersant.ru/RSS/main.xml",
     ],
     "en": [
         "https://feeds.arstechnica.com/arstechnica/index",
