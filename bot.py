@@ -566,11 +566,18 @@ async def cb_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     context.user_data["state"] = None
 
-    # Удаляем предыдущее сообщение
-    try:
-        await query.message.delete()
-    except Exception:
-        pass
+    # Если это дайджест — только убираем кнопки, если нет — удаляем сообщение
+    current_text = query.message.text or ""
+    if current_text.startswith("📰"):
+        try:
+            await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup([]))
+        except Exception:
+            pass
+    else:
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
 
     # Отправляем новое сообщение с меню
     await query.message.reply_text(
