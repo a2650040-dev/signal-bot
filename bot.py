@@ -566,9 +566,9 @@ async def cb_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     context.user_data["state"] = None
 
-    # Убираем кнопки у предыдущего сообщения
+    # Удаляем предыдущее сообщение
     try:
-        await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup([]))
+        await query.message.delete()
     except Exception:
         pass
 
