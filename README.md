@@ -179,7 +179,7 @@ web: python bot.py
 ## Local Development
 
 ```bash
-git clone https://github.com/richardmilestones-rgb/signal-bot.git
+git clone https://github.com/a2650040-dev/signal-bot.git
 cd signal-bot
 
 pip install -r requirements.txt
